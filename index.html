@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Afficionado Coffee Roasters Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  body { font-family: Arial, sans-serif; background: #f6efe7; margin: 0; padding: 20px; color: #3b2a20; }
+  h1 { margin: 0 0 5px; }
+  .box { background: #fff; border-radius: 10px; padding: 15px; margin-top: 15px; }
+  .cards { display: flex; gap: 15px; flex-wrap: wrap; }
+  .card { flex: 1; min-width: 160px; background: #fff; border-radius: 10px; padding: 15px; text-align: center; }
+  .card h2 { margin: 5px 0 0; color: #6f4e37; }
+  .charts { display: flex; gap: 15px; flex-wrap: wrap; }
+  .charts .box { flex: 1; min-width: 300px; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border-bottom: 1px solid #ddd; padding: 6px; text-align: left; }
+  select { padding: 6px; margin-left: 8px; }
+</style>
+</head>
+<body>
+
+<h1>☕ Afficionado Coffee Roasters Dashboard</h1>
+<p>Product Optimization &amp; Revenue Contribution Analysis</p>
+
+<div class="box">
+  <b>Step 1:</b> Choose your data file (Excel or CSV):
+  <input type="file" id="fileInput" accept=".xlsx,.xls,.csv">
+  <span id="msg"></span>
+</div>
+
+<div class="box" id="filterBox" style="display:none">
+  <b>Filter by Store:</b>
+  <select id="storeFilter"></select>
+</div>
+
+<div class="cards" id="cards" style="margin-top:15px"></div>
+
+<div class="charts">
+  <div class="box"><h3>Revenue by Product Category</h3><canvas id="chart1"></canvas></div>
+  <div class="box"><h3>Top 10 Products by Revenue</h3><canvas id="chart2"></canvas></div>
+</div>
+
+<div class="box" id="tableBox" style="display:none">
+  <h3>Revenue Contribution (%) by Category</h3>
+  <table id="contribTable"></table>
+</div>
+
+<script>
+let allRows = [];
+let chart1, chart2;
+
+document.getElementById("fileInput").addEventListener("change", function (e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function (ev) {
+    try {
+      const wb = XLSX.read(new Uint8Array(ev.target.result), { type: "array" });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const raw = XLSX.utils.sheet_to_json(sheet);
+      // make column names simple: small letters, no spaces
+      allRows = raw.map(function (r) {
+        const o = {};
+        for (const k in r) o[k.trim().toLowerCase().replace(/ /g, "_")] = r[k];
+        if (o.revenue === undefined) {
+          o.revenue = Number(o.transaction_qty) * Number(o.unit_price);
+        }
+        return o;
+      });
+      setupFilter();
+      showDashboard();
+      document.getElementById("msg").textContent = " ✅ Loaded " + allRows.length + " rows";
+    } catch (err) {
+      document.getElementById("msg").textContent = " ❌ Could not read the file";
+    }
+  };
+  reader.readAsArrayBuffer(file);
+});
+
+function setupFilter() {
+  const sel = document.getElementById("storeFilter");
+  const stores = [...new Set(allRows.map(r => r.store_location).filter(Boolean))];
+  sel.innerHTML = "<option>All</option>" + stores.map(s => "<option>" + s + "</option>").join("");
+  document.getElementById("filterBox").style.display = stores.length ? "block" : "none";
+  sel.onchange = showDashboard;
+}
+
+function sumBy(rows, key) {
+  const t = {};
+  rows.forEach(r => { t[r[key]] = (t[r[key]] || 0) + Number(r.revenue || 0); });
+  return Object.entries(t).sort((a, b) => b[1] - a[1]);
+}
+
+function showDashboard() {
+  const store = document.getElementById("storeFilter").value;
+  const rows = (store && store !== "All") ? allRows.filter(r => r.store_location === store) : allRows;
+
+  const totalRev = rows.reduce((s, r) => s + Number(r.revenue || 0), 0);
+  const totalQty = rows.reduce((s, r) => s + Number(r.transaction_qty || 0), 0);
+
+  document.getElementById("cards").innerHTML =
+    '<div class="card">Total Revenue<h2>$' + totalRev.toLocaleString(undefined, {maximumFractionDigits: 0}) + '</h2></div>' +
+    '<div class="card">Items Sold<h2>' + totalQty.toLocaleString() + '</h2></div>' +
+    '<div class="card">Total Orders<h2>' + rows.length.toLocaleString() + '</h2></div>';
+
+  const cat = sumBy(rows, "product_category");
+  const prod = sumBy(rows, "product_type").slice(0, 10);
+
+  if (chart1) chart1.destroy();
+  if (chart2) chart2.destroy();
+
+  chart1 = new Chart(document.getElementById("chart1"), {
+    type: "bar",
+    data: { labels: cat.map(x => x[0]), datasets: [{ label: "Revenue", data: cat.map(x => x[1]), backgroundColor: "#6f4e37" }] }
+  });
+  chart2 = new Chart(document.getElementById("chart2"), {
+    type: "bar",
+    data: { labels: prod.map(x => x[0]), datasets: [{ label: "Revenue", data: prod.map(x => x[1]), backgroundColor: "#c08a5a" }] },
+    options: { indexAxis: "y" }
+  });
+
+  let html = "<tr><th>Category</th><th>Revenue</th><th>Contribution %</th></tr>";
+  cat.forEach(function (x) {
+    html += "<tr><td>" + x[0] + "</td><td>$" + x[1].toLocaleString(undefined, {maximumFractionDigits: 0}) +
+            "</td><td>" + (x[1] / totalRev * 100).toFixed(2) + "%</td></tr>";
+  });
+  document.getElementById("contribTable").innerHTML = html;
+  document.getElementById("tableBox").style.display = "block";
+}
+</script>
+</body>
+</html>
